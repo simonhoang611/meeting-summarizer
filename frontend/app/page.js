@@ -115,6 +115,7 @@ export default function Home() {
               <Settings size={20} /> Settings
             </button>
           </div>
+        </div>
       </header>
 
       {/* Main Content */}
