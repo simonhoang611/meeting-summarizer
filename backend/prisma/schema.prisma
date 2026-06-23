@@ -1,0 +1,50 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Meeting {
+  id          String       @id @default(cuid())
+  roomId      String       @unique
+  title       String       @default("Untitled Meeting")
+  createdAt   DateTime     @default(now())
+  endedAt     DateTime?
+  hostEmail   String?      // Links the meeting to a specific user's email
+  transcripts Transcript[]
+  summary     Summary?
+  host        User?        @relation(fields: [hostEmail], references: [email])
+}
+
+model User {
+  id        String    @id @default(cuid())
+  email     String    @unique
+  name      String?
+  image     String?
+  createdAt DateTime  @default(now())
+  meetings  Meeting[]
+}
+
+model Transcript {
+  id        String   @id @default(cuid())
+  meetingId String
+  sender    String
+  text      String
+  timestamp DateTime @default(now())
+  meeting   Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+}
+
+model Summary {
+  id        String   @id @default(cuid())
+  meetingId String   @unique
+  content   String
+  createdAt DateTime @default(now())
+  meeting   Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+}
