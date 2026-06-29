@@ -101,25 +101,16 @@ export default function Room() {
       localStream.getAudioTracks().forEach(track => { track.enabled = isMicOn; });
       
       if (isMicOn) {
-        if (!mediaRecorderRef.current && deepgramRef.current) {
-           const mediaRecorder = new MediaRecorder(localStream, { mimeType: 'audio/webm' });
-           mediaRecorder.ondataavailable = (e) => {
-             if (e.data.size > 0 && isDeepgramReadyRef.current && deepgramRef.current) {
-               try { deepgramRef.current.send(e.data); } catch(err) {}
-             }
-           };
-           mediaRecorder.start(250);
-           mediaRecorderRef.current = mediaRecorder;
-        } else if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
-           mediaRecorderRef.current.start(250);
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
+          mediaRecorderRef.current.resume();
         }
       } else {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.stop();
+          mediaRecorderRef.current.pause();
         }
       }
     }
-  }, [isVideoOn, isMicOn, localStream, userName]);
+  }, [isVideoOn, isMicOn, localStream]);
 
   // Re-assign srcObject when switching from lobby to call
   useEffect(() => {
@@ -274,6 +265,20 @@ export default function Room() {
         ws.onopen = () => {
           console.log('Deepgram connected');
           isDeepgramReadyRef.current = true;
+          
+          // Start MediaRecorder now that WebSocket is ready
+          const stream = localStreamRef.current;
+          if (stream && !mediaRecorderRef.current && isMicOnRef.current) {
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            mediaRecorder.ondataavailable = (e) => {
+              if (e.data.size > 0 && isDeepgramReadyRef.current && deepgramRef.current) {
+                try { deepgramRef.current.send(e.data); } catch(err) {}
+              }
+            };
+            mediaRecorder.start(250);
+            mediaRecorderRef.current = mediaRecorder;
+            console.log('MediaRecorder started - sending audio to Deepgram');
+          }
         };
         
         ws.onclose = () => {
