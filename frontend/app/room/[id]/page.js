@@ -298,8 +298,14 @@ export default function Room() {
             
             source.connect(gainNode);
             gainNode.connect(processor);
-            processor.connect(audioContext.destination);
-            console.log(`Audio streaming: ${nativeSR}Hz → ${targetSR}Hz (gain: 10x)`);
+            
+            // Fix: Mute the output so the user doesn't hear their own mic (which causes massive feedback loops and lag)
+            const muteNode = audioContext.createGain();
+            muteNode.gain.value = 0;
+            processor.connect(muteNode);
+            muteNode.connect(audioContext.destination);
+            
+            console.log(`Audio streaming: ${nativeSR}Hz → ${targetSR}Hz (gain: 10x, muted output)`);
           }
         };
         
@@ -312,11 +318,14 @@ export default function Room() {
             const parsed = JSON.parse(event.data);
             if (parsed.channel && parsed.channel.alternatives && parsed.channel.alternatives.length > 0) {
               const transcript = parsed.channel.alternatives[0].transcript;
-              if (transcript && transcript.trim() && socketRef.current && parsed.is_final) {
-                socketRef.current.emit('new-transcript', {
-                  sender: userName,
-                  text: transcript.trim()
-                });
+              if (transcript && transcript.trim() && socketRef.current) {
+                // If it's a final transcript, emit it to the room
+                if (parsed.is_final) {
+                  socketRef.current.emit('new-transcript', {
+                    sender: userName,
+                    text: transcript.trim()
+                  });
+                }
               }
             }
           } catch(e) {}
