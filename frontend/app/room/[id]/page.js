@@ -40,6 +40,7 @@ export default function Room() {
   const [activeTab, setActiveTab] = useState('transcript');
   
   const [transcriptData, setTranscriptData] = useState([]);
+  const [interimTranscript, setInterimTranscript] = useState('');
   const [summaryData, setSummaryData] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
   
@@ -251,6 +252,11 @@ export default function Room() {
     const setupDeepgram = async () => {
       if (deepgramRef.current) return;
       
+      // Initialize AudioContext synchronously to prevent browser from suspending it (user gesture requirement)
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      
       try {
         const res = await fetch('/api/deepgram-key');
         const data = await res.json();
@@ -268,8 +274,10 @@ export default function Room() {
           // Start AudioContext + ScriptProcessor for PCM streaming
           const stream = localStreamRef.current;
           if (stream && isMicOnRef.current) {
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            audioContextRef.current = audioContext;
+            // Resume in case it was suspended
+            if (audioContext.state === 'suspended') {
+              audioContext.resume();
+            }
             const nativeSR = audioContext.sampleRate;
             const targetSR = 16000;
             const ratio = nativeSR / targetSR;
@@ -318,15 +326,24 @@ export default function Room() {
             const parsed = JSON.parse(event.data);
             if (parsed.channel && parsed.channel.alternatives && parsed.channel.alternatives.length > 0) {
               const transcript = parsed.channel.alternatives[0].transcript;
-              if (transcript && transcript.trim() && socketRef.current) {
-                // If it's a final transcript, emit it to the room
+              if (transcript && transcript.trim()) {
                 if (parsed.is_final) {
-                  socketRef.current.emit('new-transcript', {
-                    sender: userName,
-                    text: transcript.trim()
-                  });
+                  // Clear interim and emit final
+                  setInterimTranscript('');
+                  if (socketRef.current) {
+                    socketRef.current.emit('new-transcript', {
+                      sender: userName,
+                      text: transcript.trim()
+                    });
+                  }
+                } else {
+                  // Update interim
+                  setInterimTranscript(transcript);
                 }
               }
+            } else if (parsed.is_final) {
+               // Sometimes final comes empty, clear interim anyway
+               setInterimTranscript('');
             }
           } catch(e) {}
         };
@@ -631,6 +648,23 @@ export default function Room() {
                             </div>
                           )
                         })
+                      )}
+                      
+                      {/* Show interim transcript while speaking */}
+                      {interimTranscript && (
+                        <div className="fade-in" style={{ display: 'flex', gap: '12px', flexDirection: 'row-reverse', opacity: 0.7 }}>
+                          <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: 'var(--accent-color)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600 }}>
+                            {userName.charAt(0).toUpperCase()}
+                          </div>
+                          <div style={{ alignItems: 'flex-end', display: 'flex', flexDirection: 'column' }}>
+                            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginBottom: '4px' }}>
+                              <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>You <span style={{fontSize: '0.75rem', fontWeight: 400}}>(đang nói...)</span></span>
+                            </div>
+                            <div style={{ background: 'var(--surface-color)', padding: '12px 16px', borderRadius: '12px 0 12px 12px', fontSize: '0.875rem', color: 'var(--text-primary)', fontStyle: 'italic' }}>
+                              {interimTranscript}
+                            </div>
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}
