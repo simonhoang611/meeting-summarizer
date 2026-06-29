@@ -278,7 +278,7 @@ export default function Room() {
         }
         
         const ws = new WebSocket(
-          `wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true&encoding=linear16&sample_rate=16000&channels=1&interim_results=true`,
+          `wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true&interim_results=true`,
           ['token', apiKey]
         );
 
@@ -286,50 +286,36 @@ export default function Room() {
           console.log('Deepgram connected');
           isDeepgramReadyRef.current = true;
           
-          // Start AudioContext + ScriptProcessor for PCM streaming
+          // Start AudioContext for 10x Gain + MediaRecorder for background-thread recording (prevents dropping audio due to UI lag)
           const stream = localStreamRef.current;
           if (stream && isMicOnRef.current && audioContext) {
-            const nativeSR = audioContext.sampleRate;
-            const targetSR = 16000;
-            const ratio = nativeSR / targetSR;
             
             const source = audioContext.createMediaStreamSource(stream);
-            audioSourceRef.current = source;
             
-            // Amplify mic audio (10x gain) to compensate for low mic levels
+            // Amplify mic audio (10x gain)
             const gainNode = audioContext.createGain();
             gainNode.gain.value = 10.0;
             
-            const processor = audioContext.createScriptProcessor(4096, 1, 1);
-            processorRef.current = processor;
-            
-            processor.onaudioprocess = (e) => {
-              // Mute playback by filling output with zeros to prevent audio feedback loop
-              const outputData = e.outputBuffer.getChannelData(0);
-              for (let i = 0; i < outputData.length; i++) {
-                outputData[i] = 0;
-              }
-              
-              if (ws.readyState !== WebSocket.OPEN || !isMicOnRef.current) return;
-              
-              const inputData = e.inputBuffer.getChannelData(0);
-              const outputLength = Math.floor(inputData.length / ratio);
-              const pcm16 = new Int16Array(outputLength);
-              for (let i = 0; i < outputLength; i++) {
-                const s = Math.max(-1, Math.min(1, inputData[Math.floor(i * ratio)]));
-                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-              }
-              ws.send(pcm16.buffer);
-            };
+            // Route amplified audio to a dummy destination stream
+            const dest = audioContext.createMediaStreamDestination();
             
             source.connect(gainNode);
-            gainNode.connect(processor);
+            gainNode.connect(dest);
             
-            // Connect processor directly to destination so Firefox doesn't optimize it away.
-            // The output is silenced inside onaudioprocess above, so no echo will occur.
-            processor.connect(audioContext.destination);
+            // Record the amplified dummy stream using MediaRecorder (runs in background, never drops frames)
+            // Note: Deepgram will automatically detect the WebM/Opus or MP4 format.
+            const recorder = new MediaRecorder(dest.stream);
+            processorRef.current = recorder; // reuse the ref to store recorder
             
-            console.log(`Audio streaming: ${nativeSR}Hz → ${targetSR}Hz (gain: 10x, buffer-muted)`);
+            recorder.ondataavailable = (e) => {
+              if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+                ws.send(e.data);
+              }
+            };
+            
+            recorder.start(250); // Send chunks every 250ms
+            
+            console.log(`Audio streaming via MediaRecorder (gain: 10x)`);
           }
         };
         
@@ -409,7 +395,9 @@ export default function Room() {
     Object.values(peersRef.current).forEach(peer => peer.close());
     peersRef.current = {};
     if (deepgramRef.current) deepgramRef.current.close();
-    if (processorRef.current) processorRef.current.disconnect();
+    if (processorRef.current && processorRef.current.state !== 'inactive') {
+      try { processorRef.current.stop(); } catch(e) {}
+    }
     if (audioContextRef.current) audioContextRef.current.close();
     router.push('/');
   };
