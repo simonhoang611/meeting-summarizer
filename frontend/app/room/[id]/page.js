@@ -55,7 +55,9 @@ export default function Room() {
   // Map of socketId -> ICE candidate queue
   const pendingCandidatesRef = useRef({});
   const deepgramRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const processorRef = useRef(null);
+  const audioSourceRef = useRef(null);
   const isDeepgramReadyRef = useRef(false);
   const isMicOnRef = useRef(isMicOn);
   const localStreamRef = useRef(null);
@@ -78,7 +80,14 @@ export default function Room() {
     let stream;
     async function setupMedia() {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({ 
+          video: true, 
+          audio: { 
+            autoGainControl: true,
+            noiseSuppression: false,
+            echoCancellation: false,
+          } 
+        });
         setLocalStream(stream);
         localStreamRef.current = stream;
         if (videoRef.current) {
@@ -99,16 +108,6 @@ export default function Room() {
     if (localStream) {
       localStream.getVideoTracks().forEach(track => { track.enabled = isVideoOn; });
       localStream.getAudioTracks().forEach(track => { track.enabled = isMicOn; });
-      
-      if (isMicOn) {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
-          mediaRecorderRef.current.resume();
-        }
-      } else {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          mediaRecorderRef.current.pause();
-        }
-      }
     }
   }, [isVideoOn, isMicOn, localStream]);
 
@@ -258,7 +257,7 @@ export default function Room() {
         const apiKey = data.key;
         
         const ws = new WebSocket(
-          'wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true',
+          `wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true&encoding=linear16&sample_rate=16000&channels=1&interim_results=true`,
           ['token', apiKey]
         );
 
@@ -266,18 +265,41 @@ export default function Room() {
           console.log('Deepgram connected');
           isDeepgramReadyRef.current = true;
           
-          // Start MediaRecorder now that WebSocket is ready
+          // Start AudioContext + ScriptProcessor for PCM streaming
           const stream = localStreamRef.current;
-          if (stream && !mediaRecorderRef.current && isMicOnRef.current) {
-            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-            mediaRecorder.ondataavailable = (e) => {
-              if (e.data.size > 0 && isDeepgramReadyRef.current && deepgramRef.current) {
-                try { deepgramRef.current.send(e.data); } catch(err) {}
+          if (stream && isMicOnRef.current) {
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            audioContextRef.current = audioContext;
+            const nativeSR = audioContext.sampleRate;
+            const targetSR = 16000;
+            const ratio = nativeSR / targetSR;
+            
+            const source = audioContext.createMediaStreamSource(stream);
+            audioSourceRef.current = source;
+            
+            // Amplify mic audio (10x gain) to compensate for low mic levels
+            const gainNode = audioContext.createGain();
+            gainNode.gain.value = 10.0;
+            
+            const processor = audioContext.createScriptProcessor(4096, 1, 1);
+            processorRef.current = processor;
+            
+            processor.onaudioprocess = (e) => {
+              if (ws.readyState !== WebSocket.OPEN || !isMicOnRef.current) return;
+              const inputData = e.inputBuffer.getChannelData(0);
+              const outputLength = Math.floor(inputData.length / ratio);
+              const pcm16 = new Int16Array(outputLength);
+              for (let i = 0; i < outputLength; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[Math.floor(i * ratio)]));
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
               }
+              ws.send(pcm16.buffer);
             };
-            mediaRecorder.start(250);
-            mediaRecorderRef.current = mediaRecorder;
-            console.log('MediaRecorder started - sending audio to Deepgram');
+            
+            source.connect(gainNode);
+            gainNode.connect(processor);
+            processor.connect(audioContext.destination);
+            console.log(`Audio streaming: ${nativeSR}Hz → ${targetSR}Hz (gain: 10x)`);
           }
         };
         
