@@ -300,7 +300,14 @@ export default function Room() {
             processorRef.current = processor;
             
             processor.onaudioprocess = (e) => {
+              // Mute playback by filling output with zeros to prevent audio feedback loop
+              const outputData = e.outputBuffer.getChannelData(0);
+              for (let i = 0; i < outputData.length; i++) {
+                outputData[i] = 0;
+              }
+              
               if (ws.readyState !== WebSocket.OPEN || !isMicOnRef.current) return;
+              
               const inputData = e.inputBuffer.getChannelData(0);
               const outputLength = Math.floor(inputData.length / ratio);
               const pcm16 = new Int16Array(outputLength);
@@ -314,13 +321,11 @@ export default function Room() {
             source.connect(gainNode);
             gainNode.connect(processor);
             
-            // Fix: Mute the output without triggering browser graph optimizations (especially in Firefox).
-            // We route the output to a dummy MediaStreamDestination instead of the speakers.
-            // This prevents the feedback loop while keeping the audio graph active.
-            const dummyDest = audioContext.createMediaStreamDestination();
-            processor.connect(dummyDest);
+            // Connect processor directly to destination so Firefox doesn't optimize it away.
+            // The output is silenced inside onaudioprocess above, so no echo will occur.
+            processor.connect(audioContext.destination);
             
-            console.log(`Audio streaming: ${nativeSR}Hz → ${targetSR}Hz (gain: 10x, muted output)`);
+            console.log(`Audio streaming: ${nativeSR}Hz → ${targetSR}Hz (gain: 10x, buffer-muted)`);
           }
         };
         
