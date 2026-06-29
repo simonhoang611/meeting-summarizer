@@ -54,7 +54,9 @@ export default function Room() {
   const peersRef = useRef({});
   // Map of socketId -> ICE candidate queue
   const pendingCandidatesRef = useRef({});
-  const recognitionRef = useRef(null);
+  const deepgramRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const isDeepgramReadyRef = useRef(false);
   const isMicOnRef = useRef(isMicOn);
   const localStreamRef = useRef(null);
   
@@ -98,15 +100,26 @@ export default function Room() {
       localStream.getVideoTracks().forEach(track => { track.enabled = isVideoOn; });
       localStream.getAudioTracks().forEach(track => { track.enabled = isMicOn; });
       
-      if (recognitionRef.current) {
-        if (isMicOn) {
-          try { recognitionRef.current.start(); } catch(e){}
-        } else {
-          recognitionRef.current.stop();
+      if (isMicOn) {
+        if (!mediaRecorderRef.current && deepgramRef.current) {
+           const mediaRecorder = new MediaRecorder(localStream, { mimeType: 'audio/webm' });
+           mediaRecorder.ondataavailable = (e) => {
+             if (e.data.size > 0 && isDeepgramReadyRef.current && deepgramRef.current) {
+               try { deepgramRef.current.send(e.data); } catch(err) {}
+             }
+           };
+           mediaRecorder.start(250);
+           mediaRecorderRef.current = mediaRecorder;
+        } else if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+           mediaRecorderRef.current.start(250);
+        }
+      } else {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.stop();
         }
       }
     }
-  }, [isVideoOn, isMicOn, localStream]);
+  }, [isVideoOn, isMicOn, localStream, userName]);
 
   // Re-assign srcObject when switching from lobby to call
   useEffect(() => {
@@ -245,45 +258,55 @@ export default function Room() {
       });
     });
 
-    setupSpeechRecognition();
-  };
-
-  const setupSpeechRecognition = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      console.warn('Speech Recognition API not supported in this browser.');
-      alert('Trình duyệt của bạn không hỗ trợ nhận diện giọng nói (Web Speech API). Vui lòng sử dụng Google Chrome hoặc Microsoft Edge để dùng tính năng AI Transcript.');
-      return;
-    }
-    
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.lang = 'vi-VN'; 
-
-    recognition.onresult = (event) => {
-      const last = event.results.length - 1;
-      const text = event.results[last][0].transcript;
+    const setupDeepgram = async () => {
+      if (deepgramRef.current) return;
       
-      if (text.trim() && socketRef.current) {
-        socketRef.current.emit('new-transcript', {
-          sender: userName,
-          text: text.trim()
-        });
+      try {
+        const res = await fetch('/api/deepgram-key');
+        const data = await res.json();
+        const apiKey = data.key;
+        
+        const ws = new WebSocket(
+          'wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true',
+          ['token', apiKey]
+        );
+
+        ws.onopen = () => {
+          console.log('Deepgram connected');
+          isDeepgramReadyRef.current = true;
+        };
+        
+        ws.onclose = () => {
+          isDeepgramReadyRef.current = false;
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const parsed = JSON.parse(event.data);
+            if (parsed.channel && parsed.channel.alternatives && parsed.channel.alternatives.length > 0) {
+              const transcript = parsed.channel.alternatives[0].transcript;
+              if (transcript && transcript.trim() && socketRef.current && parsed.is_final) {
+                socketRef.current.emit('new-transcript', {
+                  sender: userName,
+                  text: transcript.trim()
+                });
+              }
+            }
+          } catch(e) {}
+        };
+
+        ws.onerror = (err) => {
+          console.error('Deepgram error:', err);
+        };
+
+        deepgramRef.current = ws;
+      } catch (err) {
+        console.error('Failed to setup Deepgram', err);
       }
     };
-
-    recognition.onend = () => {
-      if (isMicOnRef.current && recognitionRef.current) {
-        try { recognitionRef.current.start(); } catch(e) {}
-      }
-    };
-
-    recognitionRef.current = recognition;
-    if (isMicOn) {
-      try { recognition.start(); } catch(e) {}
-    }
+    setupDeepgram();
   };
+
 
   const generateSummary = async () => {
     if (transcriptData.length === 0) return;
