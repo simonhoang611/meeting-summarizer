@@ -43,6 +43,7 @@ export default function Room() {
   const [interimTranscript, setInterimTranscript] = useState('');
   const [summaryData, setSummaryData] = useState('');
   const [isSummarizing, setIsSummarizing] = useState(false);
+  const [deepgramError, setDeepgramError] = useState('');
   
   // Multi-peer: map of socketId -> { stream, userName }
   const [remotePeers, setRemotePeers] = useState({});
@@ -262,6 +263,12 @@ export default function Room() {
         const data = await res.json();
         const apiKey = data.key;
         
+        if (!apiKey) {
+          setDeepgramError('Missing Deepgram API Key. Please add DEEPGRAM_API_KEY to Vercel Environment Variables.');
+          console.error('Deepgram API Key is missing!');
+          return;
+        }
+        
         const ws = new WebSocket(
           `wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true&encoding=linear16&sample_rate=16000&channels=1&interim_results=true`,
           ['token', apiKey]
@@ -307,9 +314,11 @@ export default function Room() {
             source.connect(gainNode);
             gainNode.connect(processor);
             
-            // Fix: Mute the output so the user doesn't hear their own mic (which causes massive feedback loops and lag)
+            // Fix: Mute the output so the user doesn't hear their own mic. 
+            // We use 0.00001 instead of 0 because some browsers (Chrome/Safari) optimize away silent branches, 
+            // which stops onaudioprocess from firing entirely.
             const muteNode = audioContext.createGain();
-            muteNode.gain.value = 0;
+            muteNode.gain.value = 0.00001;
             processor.connect(muteNode);
             muteNode.connect(audioContext.destination);
             
@@ -625,7 +634,14 @@ export default function Room() {
                   
                   {activeTab === 'transcript' && (
                     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                      {transcriptData.length === 0 ? (
+                      
+                      {deepgramError && (
+                        <div style={{ padding: '16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger-color)', borderRadius: '8px', border: '1px solid var(--danger-color)', fontSize: '0.875rem' }}>
+                          <span style={{ fontWeight: 600 }}>Error:</span> {deepgramError}
+                        </div>
+                      )}
+                      
+                      {transcriptData.length === 0 && !interimTranscript && !deepgramError ? (
                         <div style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '40px' }}>
                            Chưa có hội thoại nào. Hãy bật mic và nói gì đó!
                         </div>
