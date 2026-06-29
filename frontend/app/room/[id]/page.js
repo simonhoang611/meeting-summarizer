@@ -92,6 +92,12 @@ export default function Room() {
         });
         setLocalStream(stream);
         localStreamRef.current = stream;
+        
+        // Firefox fix: AudioContext MUST be created near stream creation time, 
+        // otherwise it outputs pure silence.
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        audioContextRef.current = new AudioContext();
+        
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
@@ -253,10 +259,12 @@ export default function Room() {
     const setupDeepgram = async () => {
       if (deepgramRef.current) return;
       
-      // Initialize AudioContext synchronously to prevent browser from suspending it (user gesture requirement)
-      const AudioContext = window.AudioContext || window.webkitAudioContext;
-      const audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
+      const audioContext = audioContextRef.current;
+      
+      // Resume AudioContext synchronously BEFORE any await to satisfy browser user gesture policies
+      if (audioContext && audioContext.state === 'suspended') {
+        audioContext.resume();
+      }
       
       try {
         const res = await fetch('/api/deepgram-key');
@@ -280,11 +288,7 @@ export default function Room() {
           
           // Start AudioContext + ScriptProcessor for PCM streaming
           const stream = localStreamRef.current;
-          if (stream && isMicOnRef.current) {
-            // Resume in case it was suspended
-            if (audioContext.state === 'suspended') {
-              audioContext.resume();
-            }
+          if (stream && isMicOnRef.current && audioContext) {
             const nativeSR = audioContext.sampleRate;
             const targetSR = 16000;
             const ratio = nativeSR / targetSR;
