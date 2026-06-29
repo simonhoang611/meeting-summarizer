@@ -314,13 +314,11 @@ export default function Room() {
             source.connect(gainNode);
             gainNode.connect(processor);
             
-            // Fix: Mute the output so the user doesn't hear their own mic. 
-            // We use 0.00001 instead of 0 because some browsers (Chrome/Safari) optimize away silent branches, 
-            // which stops onaudioprocess from firing entirely.
-            const muteNode = audioContext.createGain();
-            muteNode.gain.value = 0.00001;
-            processor.connect(muteNode);
-            muteNode.connect(audioContext.destination);
+            // Fix: Mute the output without triggering browser graph optimizations (especially in Firefox).
+            // We route the output to a dummy MediaStreamDestination instead of the speakers.
+            // This prevents the feedback loop while keeping the audio graph active.
+            const dummyDest = audioContext.createMediaStreamDestination();
+            processor.connect(dummyDest);
             
             console.log(`Audio streaming: ${nativeSR}Hz → ${targetSR}Hz (gain: 10x, muted output)`);
           }
@@ -401,7 +399,9 @@ export default function Room() {
     if (socketRef.current) socketRef.current.disconnect();
     Object.values(peersRef.current).forEach(peer => peer.close());
     peersRef.current = {};
-    if (recognitionRef.current) recognitionRef.current.stop();
+    if (deepgramRef.current) deepgramRef.current.close();
+    if (processorRef.current) processorRef.current.disconnect();
+    if (audioContextRef.current) audioContextRef.current.close();
     router.push('/');
   };
 
