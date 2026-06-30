@@ -86,8 +86,8 @@ export default function Room() {
           video: true, 
           audio: { 
             autoGainControl: true,
-            noiseSuppression: false,
-            echoCancellation: false,
+            noiseSuppression: true,
+            echoCancellation: true,
           } 
         });
         setLocalStream(stream);
@@ -294,10 +294,6 @@ export default function Room() {
             
             const source = audioContext.createMediaStreamSource(stream);
             
-            // Amplify mic audio (10x gain)
-            const gainNode = audioContext.createGain();
-            gainNode.gain.value = 10.0;
-            
             const processor = audioContext.createScriptProcessor(4096, 1, 1);
             processorRef.current = processor;
             
@@ -319,14 +315,13 @@ export default function Room() {
               ws.send(pcm16.buffer);
             };
             
-            source.connect(gainNode);
-            gainNode.connect(processor);
+            source.connect(processor);
             
             // Connect processor directly to destination so browser doesn't optimize it away.
             // The output is silenced inside onaudioprocess above, so no echo will occur.
             processor.connect(audioContext.destination);
             
-            console.log(`Audio streaming via ScriptProcessor (gain: 10x, PCM ${nativeSR}Hz)`);
+            console.log(`Audio streaming via ScriptProcessor (PCM ${nativeSR}Hz, Native AGC/Noise Suppression enabled)`);
           }
         };
         
