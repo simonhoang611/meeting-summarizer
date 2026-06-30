@@ -106,7 +106,7 @@ Hãy viết bằng Tiếng Việt. Phân chia rõ ràng thành 2 phần:
 Đoạn hội thoại:
 ${conversation}`;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
     const result = await model.generateContent(prompt);
     const aiText = result.response.text();
     
@@ -175,7 +175,7 @@ Hãy viết bằng Tiếng Việt. Phân chia rõ ràng thành 2 phần:
 Đoạn hội thoại:
 ${conversation}`;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
     const result = await model.generateContent(prompt);
     const aiText = result.response.text();
     

@@ -277,8 +277,10 @@ export default function Room() {
           return;
         }
         
+        const nativeSR = audioContext ? audioContext.sampleRate : 48000;
+        
         const ws = new WebSocket(
-          `wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true&interim_results=true`,
+          `wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true&encoding=linear16&sample_rate=${nativeSR}&channels=1&interim_results=true`,
           ['token', apiKey]
         );
 
@@ -286,7 +288,7 @@ export default function Room() {
           console.log('Deepgram connected');
           isDeepgramReadyRef.current = true;
           
-          // Start AudioContext for 10x Gain + MediaRecorder for background-thread recording (prevents dropping audio due to UI lag)
+          // Start AudioContext + ScriptProcessor for raw PCM streaming (instant, zero delay)
           const stream = localStreamRef.current;
           if (stream && isMicOnRef.current && audioContext) {
             
@@ -296,26 +298,35 @@ export default function Room() {
             const gainNode = audioContext.createGain();
             gainNode.gain.value = 10.0;
             
-            // Route amplified audio to a dummy destination stream
-            const dest = audioContext.createMediaStreamDestination();
+            const processor = audioContext.createScriptProcessor(4096, 1, 1);
+            processorRef.current = processor;
             
-            source.connect(gainNode);
-            gainNode.connect(dest);
-            
-            // Record the amplified dummy stream using MediaRecorder (runs in background, never drops frames)
-            // Note: Deepgram will automatically detect the WebM/Opus or MP4 format.
-            const recorder = new MediaRecorder(dest.stream);
-            processorRef.current = recorder; // reuse the ref to store recorder
-            
-            recorder.ondataavailable = (e) => {
-              if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-                ws.send(e.data);
+            processor.onaudioprocess = (e) => {
+              // Mute playback by filling output with zeros to prevent audio feedback loop
+              const outputData = e.outputBuffer.getChannelData(0);
+              for (let i = 0; i < outputData.length; i++) {
+                outputData[i] = 0;
               }
+              
+              if (ws.readyState !== WebSocket.OPEN || !isMicOnRef.current) return;
+              
+              const inputData = e.inputBuffer.getChannelData(0);
+              const pcm16 = new Int16Array(inputData.length);
+              for (let i = 0; i < inputData.length; i++) {
+                const s = Math.max(-1, Math.min(1, inputData[i]));
+                pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+              }
+              ws.send(pcm16.buffer);
             };
             
-            recorder.start(250); // Send chunks every 250ms
+            source.connect(gainNode);
+            gainNode.connect(processor);
             
-            console.log(`Audio streaming via MediaRecorder (gain: 10x)`);
+            // Connect processor directly to destination so browser doesn't optimize it away.
+            // The output is silenced inside onaudioprocess above, so no echo will occur.
+            processor.connect(audioContext.destination);
+            
+            console.log(`Audio streaming via ScriptProcessor (gain: 10x, PCM ${nativeSR}Hz)`);
           }
         };
         
@@ -395,8 +406,8 @@ export default function Room() {
     Object.values(peersRef.current).forEach(peer => peer.close());
     peersRef.current = {};
     if (deepgramRef.current) deepgramRef.current.close();
-    if (processorRef.current && processorRef.current.state !== 'inactive') {
-      try { processorRef.current.stop(); } catch(e) {}
+    if (processorRef.current) {
+      try { processorRef.current.disconnect(); } catch(e) {}
     }
     if (audioContextRef.current) audioContextRef.current.close();
     router.push('/');
