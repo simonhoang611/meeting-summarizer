@@ -163,12 +163,12 @@ export default function Room() {
     };
 
     peer.ontrack = (e) => {
-      const stream = e.streams[0];
       const track = e.track;
+      const stream = (e.streams && e.streams[0]) ? e.streams[0] : new MediaStream([track]);
       
       setRemotePeers(prev => {
         const currentPeer = prev[targetSocketId] || { userName: 'Partner', streams: {} };
-        const streams = currentPeer.streams || {};
+        const streams = { ...(currentPeer.streams || {}) };
         streams[stream.id] = stream;
         
         return {
@@ -176,7 +176,6 @@ export default function Room() {
           [targetSocketId]: { 
             ...currentPeer, 
             streams,
-            // Track mapping so we know which track belongs to which stream
             [`track_${track.id}_streamId`]: stream.id
           }
         };
@@ -527,7 +526,19 @@ export default function Room() {
 
   // Find active screen stream
   const remoteScreenStreams = remoteEntries
-    .map(([id, data]) => ({ id, data, stream: data.streams?.[data.screenStreamId] }))
+    .map(([id, data]) => {
+      let stream = data.streams?.[data.screenStreamId];
+      // Fallback if ID doesn't match (WebRTC sometimes regenerates stream IDs)
+      if (!stream && data.streams) {
+        const streamIds = Object.keys(data.streams);
+        if (streamIds.length > 1) {
+          const camId = data.cameraStreamId || streamIds[0];
+          const screenId = streamIds.find(k => k !== camId);
+          if (screenId) stream = data.streams[screenId];
+        }
+      }
+      return { id, data, stream };
+    })
     .filter(item => item.stream);
     
   const activeScreenStream = isScreenSharing ? screenStreamRef.current : remoteScreenStreams[0]?.stream;
@@ -667,6 +678,7 @@ export default function Room() {
                         videoRef.current = el;
                         if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
                           el.srcObject = localStreamRef.current;
+                          el.play().catch(e => console.error('Play error', e));
                         }
                       }}
                       autoPlay playsInline muted style={{ transform: 'scaleX(-1)', display: isVideoOn ? 'block' : 'none' }} />
@@ -719,6 +731,7 @@ export default function Room() {
                         videoRef.current = el;
                         if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
                           el.srcObject = localStreamRef.current;
+                          el.play().catch(e => console.error('Play error', e));
                         }
                       }}
                       autoPlay playsInline muted style={{ transform: 'scaleX(-1)', display: isVideoOn ? 'block' : 'none' }} />
