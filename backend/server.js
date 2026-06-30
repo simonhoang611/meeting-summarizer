@@ -299,6 +299,11 @@ io.on('connection', (socket) => {
   socket.on('ice-candidate', (payload) => {
     io.to(payload.target).emit('ice-candidate', { candidate: payload.candidate, from: socket.id });
   });
+
+  // Forward track metadata
+  socket.on('track-metadata', (payload) => {
+    io.to(payload.target).emit('track-metadata', payload);
+  });
 });
 
 const PORT = process.env.PORT || 5000;

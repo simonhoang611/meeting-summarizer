@@ -150,16 +150,53 @@ export default function Room() {
       }
     };
 
+    peer.onnegotiationneeded = async () => {
+      try {
+        const offer = await peer.createOffer();
+        await peer.setLocalDescription(offer);
+        if (socketRef.current) {
+          socketRef.current.emit('offer', { target: targetSocketId, caller: socketRef.current.id, callerName: userName, sdp: peer.localDescription });
+        }
+      } catch (err) {
+        console.error('Renegotiation error', err);
+      }
+    };
+
     peer.ontrack = (e) => {
-      setRemotePeers(prev => ({
-        ...prev,
-        [targetSocketId]: { ...prev[targetSocketId], stream: e.streams[0] }
-      }));
+      const stream = e.streams[0];
+      const track = e.track;
+      
+      setRemotePeers(prev => {
+        const currentPeer = prev[targetSocketId] || { userName: 'Partner', streams: {} };
+        const streams = currentPeer.streams || {};
+        streams[stream.id] = stream;
+        
+        return {
+          ...prev,
+          [targetSocketId]: { 
+            ...currentPeer, 
+            streams,
+            // Track mapping so we know which track belongs to which stream
+            [`track_${track.id}_streamId`]: stream.id
+          }
+        };
+      });
     };
 
     const stream = localStreamRef.current;
     if (stream) {
-      stream.getTracks().forEach(track => peer.addTrack(track, stream));
+      stream.getTracks().forEach(track => {
+        peer.addTrack(track, stream);
+        if (socketRef.current) {
+          socketRef.current.emit('track-metadata', { target: targetSocketId, caller: socketRef.current.id, trackId: track.id, type: 'camera' });
+        }
+      });
+    }
+    const screenStream = screenStreamRef.current;
+    if (screenStream) {
+      screenStream.getTracks().forEach(track => {
+        peer.addTrack(track, screenStream);
+      });
     }
     
     peersRef.current[targetSocketId] = peer;
@@ -206,15 +243,27 @@ export default function Room() {
     // I received an offer from someone - create answer
     socketRef.current.on('offer', async (payload) => {
       console.log(`Received offer from ${payload.caller}`);
-      setRemotePeers(prev => ({ ...prev, [payload.caller]: { userName: payload.callerName || 'Partner', stream: null } }));
+      setRemotePeers(prev => {
+        if (!prev[payload.caller]) return { ...prev, [payload.caller]: { userName: payload.callerName || 'Partner', stream: null } };
+        return prev;
+      });
       
-      const peer = createPeer(payload.caller);
-      await peer.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-      const answer = await peer.createAnswer();
-      await peer.setLocalDescription(answer);
-      socketRef.current.emit('answer', { target: payload.caller, caller: socketRef.current.id, sdp: answer });
+      let peer = peersRef.current[payload.caller];
+      if (!peer) {
+        peer = createPeer(payload.caller);
+      }
       
-      await flushCandidates(payload.caller);
+      // If we are in the middle of our own renegotiation, signaling state might clash. 
+      // Simplified approach: just set remote description.
+      try {
+        await peer.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        socketRef.current.emit('answer', { target: payload.caller, caller: socketRef.current.id, sdp: answer });
+        await flushCandidates(payload.caller);
+      } catch (err) {
+        console.error('Error handling offer:', err);
+      }
     });
 
     // I received an answer to my offer
@@ -242,6 +291,24 @@ export default function Room() {
         if (!pendingCandidatesRef.current[fromId]) pendingCandidatesRef.current[fromId] = [];
         pendingCandidatesRef.current[fromId].push(incoming.candidate);
       }
+    });
+
+    socketRef.current.on('track-metadata', (payload) => {
+      const { caller, trackId, type } = payload;
+      setRemotePeers(prev => {
+        const peer = prev[caller];
+        if (!peer) return prev;
+        
+        const streamId = peer[`track_${trackId}_streamId`];
+        
+        return {
+          ...prev,
+          [caller]: {
+            ...peer,
+            [`${type}StreamId`]: streamId
+          }
+        };
+      });
     });
 
     // Someone disconnected
@@ -412,43 +479,40 @@ export default function Room() {
 
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
-      // Stop screen sharing -> switch back to camera
       if (screenStreamRef.current) {
+        const screenTrack = screenStreamRef.current.getVideoTracks()[0];
+        // Remove screen track from all peers
+        Object.keys(peersRef.current).forEach(peerId => {
+          const peer = peersRef.current[peerId];
+          const sender = peer.getSenders().find(s => s.track === screenTrack);
+          if (sender) peer.removeTrack(sender);
+          // Metadata cleanup not strictly necessary, receivers will handle it when track is removed
+        });
         screenStreamRef.current.getTracks().forEach(track => track.stop());
         screenStreamRef.current = null;
       }
-      const cameraTrack = localStreamRef.current?.getVideoTracks()[0];
-      if (cameraTrack) {
-        // Replace screen track with camera track in all peer connections
-        Object.values(peersRef.current).forEach(peer => {
-          const sender = peer.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) sender.replaceTrack(cameraTrack);
-        });
-        // Show camera in local video
-        if (videoRef.current) {
-          videoRef.current.srcObject = localStreamRef.current;
-        }
-      }
       setIsScreenSharing(false);
     } else {
-      // Start screen sharing
       try {
         const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
         screenStreamRef.current = screenStream;
         const screenTrack = screenStream.getVideoTracks()[0];
         
-        // Replace camera track with screen track in all peer connections
-        Object.values(peersRef.current).forEach(peer => {
-          const sender = peer.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) sender.replaceTrack(screenTrack);
+        // Add screen track to all existing peers
+        Object.keys(peersRef.current).forEach(peerId => {
+          const peer = peersRef.current[peerId];
+          peer.addTrack(screenTrack, screenStream);
+          // Emit track metadata
+          if (socketRef.current) {
+            socketRef.current.emit('track-metadata', { 
+              target: peerId, 
+              caller: socketRef.current.id, 
+              trackId: screenTrack.id, 
+              type: 'screen' 
+            });
+          }
         });
         
-        // Show screen share in local video
-        if (videoRef.current) {
-          videoRef.current.srcObject = screenStream;
-        }
-        
-        // Handle user clicking browser's "Stop sharing" button
         screenTrack.onended = () => {
           toggleScreenShare();
         };
@@ -463,7 +527,18 @@ export default function Room() {
   const remoteEntries = Object.entries(remotePeers);
   const totalParticipants = remoteEntries.length + 1; // +1 for self
 
-  const MAX_VISIBLE_TILES = 6;
+  // Find active screen stream
+  const remoteScreenStreams = remoteEntries
+    .map(([id, data]) => ({ id, data, stream: data.streams?.[data.screenStreamId] }))
+    .filter(item => item.stream);
+    
+  const activeScreenStream = isScreenSharing ? screenStreamRef.current : remoteScreenStreams[0]?.stream;
+  const screenSharerName = isScreenSharing ? "You" : remoteScreenStreams[0]?.data.userName;
+
+  const MAX_VISIBLE_TILES = activeScreenStream 
+    ? (isAiSidebarOpen ? 3 : 5) 
+    : 6;
+    
   const isOverflow = totalParticipants > MAX_VISIBLE_TILES;
   const visibleRemoteCount = isOverflow ? MAX_VISIBLE_TILES - 2 : remoteEntries.length;
   
@@ -580,37 +655,86 @@ export default function Room() {
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden', padding: '16px', gap: '16px', paddingBottom: '0' }}>
         
         {/* Video Grid Wrapper */}
-        <div className="grid-wrapper" style={{ flex: 1, minHeight: 0, minWidth: 0 }}>
-          <div className="meet-grid" data-count={renderedTilesCount}>
+        <div className="grid-wrapper" style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
           
-          {/* Remote Peers */}
-          {visibleRemoteEntries.map(([peerId, peerData]) => (
-            <RemoteVideo key={peerId} peerData={peerData} />
-          ))}
+          {/* Top Row for Cameras when Screen Sharing */}
+          {activeScreenStream && (
+            <div style={{ display: 'flex', gap: '16px', height: '160px', flexShrink: 0, overflowX: 'auto', paddingBottom: '8px' }}>
+              <div className="meet-grid" style={{ display: 'flex', flexWrap: 'nowrap', gap: '16px' }}>
+                {/* Self Video */}
+                <div className="video-wrapper" style={{ minWidth: '240px', width: '240px' }}>
+                  <div className="video-container" style={{ position: 'relative' }}>
+                    <video ref={videoRef} autoPlay playsInline muted style={{ display: isVideoOn ? 'block' : 'none' }} />
+                  {!isVideoOn && (
+                    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--surface-color)' }}>
+                      <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: 'var(--surface-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <span style={{ fontSize: '1.2rem', fontWeight: 600 }}>{userName.charAt(0).toUpperCase()}</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="video-overlay" style={{ zIndex: 20, fontSize: '0.75rem' }}>{userName} (You) {!isMicOn && <MicOff size={12} color="var(--danger-color)" style={{marginLeft: '4px'}} />}</div>
+                  </div>
+                </div>
 
-          {/* Others Tile */}
-          {isOverflow && (
-            <OthersTile hiddenPeers={hiddenRemoteEntries} />
+                {/* Remote Peers */}
+                {visibleRemoteEntries.map(([peerId, peerData]) => (
+                  <div key={peerId} style={{ minWidth: '240px', width: '240px' }}>
+                    <RemoteVideo peerData={{...peerData, stream: peerData.streams?.[peerData.cameraStreamId] || peerData.streams?.[Object.keys(peerData.streams || {})[0]]}} />
+                  </div>
+                ))}
+
+                {/* Others Tile */}
+                {isOverflow && (
+                  <div style={{ minWidth: '240px', width: '240px' }}>
+                    <OthersTile hiddenPeers={hiddenRemoteEntries} />
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
-          {/* No redundant waiting tile needed - Self Video naturally fills the 1x1 grid */}
+          {/* Main Area */}
+          {!activeScreenStream ? (
+            <div className="meet-grid" data-count={renderedTilesCount} style={{ flex: 1 }}>
+              {/* Remote Peers */}
+              {visibleRemoteEntries.map(([peerId, peerData]) => (
+                <RemoteVideo key={peerId} peerData={{...peerData, stream: peerData.streams?.[peerData.cameraStreamId] || peerData.streams?.[Object.keys(peerData.streams || {})[0]]}} />
+              ))}
 
-          {/* Self Video */}
-          <div className="video-wrapper">
-            <div className="video-container" style={{ position: 'relative' }}>
-              <video ref={videoRef} autoPlay playsInline muted style={{ transform: 'scaleX(-1)', display: isVideoOn ? 'block' : 'none' }} />
-            {!isVideoOn && (
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--surface-color)' }}>
-                <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'var(--surface-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <span style={{ fontSize: '1.5rem', fontWeight: 600 }}>{userName.charAt(0).toUpperCase()}</span>
+              {/* Others Tile */}
+              {isOverflow && (
+                <OthersTile hiddenPeers={hiddenRemoteEntries} />
+              )}
+
+              {/* Self Video */}
+              <div className="video-wrapper">
+                <div className="video-container" style={{ position: 'relative' }}>
+                  <video ref={videoRef} autoPlay playsInline muted style={{ transform: 'scaleX(-1)', display: isVideoOn ? 'block' : 'none' }} />
+                {!isVideoOn && (
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--surface-color)' }}>
+                    <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'var(--surface-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{ fontSize: '1.5rem', fontWeight: 600 }}>{userName.charAt(0).toUpperCase()}</span>
+                    </div>
+                  </div>
+                )}
+                <div className="video-overlay" style={{ zIndex: 20 }}>{userName} (You) {!isMicOn && <MicOff size={14} color="var(--danger-color)" style={{marginLeft: '4px'}} />}</div>
                 </div>
               </div>
-            )}
-            <div className="video-overlay" style={{ zIndex: 20 }}>{userName} (You) {!isMicOn && <MicOff size={14} color="var(--danger-color)" style={{marginLeft: '4px'}} />}</div>
-          </div>
-          </div>
+            </div>
+          ) : (
+            <div className="video-wrapper" style={{ flex: 1, backgroundColor: '#000' }}>
+              <div className="video-container" style={{ position: 'relative' }}>
+                <video 
+                  autoPlay 
+                  playsInline 
+                  ref={el => { if(el) el.srcObject = activeScreenStream; }} 
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
+                />
+                <div className="video-overlay" style={{ zIndex: 20 }}>{screenSharerName}'s screen</div>
+              </div>
+            </div>
+          )}
         </div>
-      </div>
 
         {/* Sidebar Area - Participants & AI panels stack here */}
         {(isAiSidebarOpen || isParticipantsOpen) && (
