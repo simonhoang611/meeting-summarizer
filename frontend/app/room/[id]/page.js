@@ -280,7 +280,7 @@ export default function Room() {
         const nativeSR = audioContext ? audioContext.sampleRate : 48000;
         
         const ws = new WebSocket(
-          `wss://api.deepgram.com/v1/listen?model=nova-2&language=vi&smart_format=true&encoding=linear16&sample_rate=${nativeSR}&channels=1&interim_results=true`,
+          `wss://api.deepgram.com/v1/listen?model=nova-2&detect_language=true&smart_format=true&encoding=linear16&sample_rate=${nativeSR}&channels=1&interim_results=true`,
           ['token', apiKey]
         );
 
