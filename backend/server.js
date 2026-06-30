@@ -3,7 +3,7 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const Groq = require('groq-sdk');
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
@@ -20,7 +20,7 @@ const io = new Server(server, {
   }
 });
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 // Store transcripts per room in memory
 const roomTranscripts = {};
@@ -106,9 +106,11 @@ Hãy viết bằng Tiếng Việt. Phân chia rõ ràng thành 2 phần:
 Đoạn hội thoại:
 ${conversation}`;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    const result = await model.generateContent(prompt);
-    const aiText = result.response.text();
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: 'llama3-70b-8192',
+    });
+    const aiText = chatCompletion.choices[0].message.content;
     
     if (meeting) {
       await prisma.summary.create({
@@ -121,7 +123,7 @@ ${conversation}`;
 
     res.json({ summary: aiText });
   } catch (error) {
-    console.error('Gemini Error:', error);
+    console.error('Groq Error:', error);
     res.status(500).json({ error: 'Failed to generate summary' });
   }
 });
@@ -175,9 +177,11 @@ Hãy viết bằng Tiếng Việt. Phân chia rõ ràng thành 2 phần:
 Đoạn hội thoại:
 ${conversation}`;
 
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    const result = await model.generateContent(prompt);
-    const aiText = result.response.text();
+    const chatCompletion = await groq.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: 'llama3-70b-8192',
+    });
+    const aiText = chatCompletion.choices[0].message.content;
     
     await prisma.summary.create({
       data: {
