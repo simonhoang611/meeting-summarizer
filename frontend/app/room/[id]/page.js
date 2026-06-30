@@ -62,6 +62,9 @@ export default function Room() {
   const processorRef = useRef(null);
   const audioSourceRef = useRef(null);
   const isDeepgramReadyRef = useRef(false);
+  const [deepgramStatus, setDeepgramStatus] = useState('Khởi tạo...');
+  const [audioLevel, setAudioLevel] = useState(0);
+  const lastAudioLevelUpdate = useRef(0);
   const isMicOnRef = useRef(isMicOn);
   const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
@@ -364,6 +367,7 @@ export default function Room() {
 
         ws.onopen = () => {
           console.log('Deepgram connected');
+          setDeepgramStatus('Đã kết nối, đang nghe...');
           isDeepgramReadyRef.current = true;
           
           // Start AudioContext + ScriptProcessor for raw PCM streaming (instant, zero delay)
@@ -386,11 +390,22 @@ export default function Room() {
               
               const inputData = e.inputBuffer.getChannelData(0);
               const pcm16 = new Int16Array(inputData.length);
+              let sumSquares = 0;
               for (let i = 0; i < inputData.length; i++) {
+                sumSquares += inputData[i] * inputData[i];
                 const s = Math.max(-1, Math.min(1, inputData[i]));
                 pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
               }
               ws.send(pcm16.buffer);
+              
+              // Calculate audio level
+              const rms = Math.sqrt(sumSquares / inputData.length);
+              const volume = Math.min(100, Math.floor(rms * 1000));
+              const now = Date.now();
+              if (now - lastAudioLevelUpdate.current > 100) {
+                 lastAudioLevelUpdate.current = now;
+                 setAudioLevel(volume);
+              }
             };
             
             source.connect(processor);
@@ -405,6 +420,8 @@ export default function Room() {
         
         ws.onclose = () => {
           isDeepgramReadyRef.current = false;
+          setDeepgramStatus('Mất kết nối');
+          setAudioLevel(0);
         };
 
         ws.onmessage = (event) => {
@@ -436,6 +453,7 @@ export default function Room() {
 
         ws.onerror = (err) => {
           console.error('Deepgram error:', err);
+          setDeepgramStatus('Lỗi kết nối');
         };
 
         deepgramRef.current = ws;
@@ -867,7 +885,37 @@ export default function Room() {
                 <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
                   
                   {activeTab === 'transcript' && (
-                    <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                    <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                      
+                      {/* AI Status / Volume Indicator */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', paddingBottom: '16px', marginBottom: '16px', borderBottom: '1px solid var(--border-color)' }}>
+                        <div style={{ 
+                          width: '8px', 
+                          height: '8px', 
+                          borderRadius: '50%', 
+                          backgroundColor: deepgramStatus.includes('Đã kết nối') ? 'var(--success-color)' : deepgramStatus.includes('Lỗi') ? 'var(--danger-color)' : 'var(--warning-color)',
+                          boxShadow: deepgramStatus.includes('Đã kết nối') ? '0 0 8px var(--success-color)' : 'none'
+                        }} />
+                        <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
+                          {deepgramStatus}
+                        </span>
+                        
+                        {deepgramStatus.includes('Đã kết nối') && isMicOn && (
+                          <div style={{ display: 'flex', gap: '3px', alignItems: 'center', height: '16px', marginLeft: 'auto' }}>
+                            {[...Array(5)].map((_, i) => (
+                               <div key={i} style={{ 
+                                 width: '4px', 
+                                 height: `${Math.max(3, (audioLevel / 100) * 16 * (1 - Math.abs(2 - i)*0.2))}px`, 
+                                 backgroundColor: 'var(--primary-color)', 
+                                 borderRadius: '2px',
+                                 transition: 'height 0.1s ease'
+                               }} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px', paddingRight: '8px' }}>
                       
                       {deepgramError && (
                         <div style={{ padding: '16px', backgroundColor: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger-color)', borderRadius: '8px', border: '1px solid var(--danger-color)', fontSize: '0.875rem' }}>
@@ -917,7 +965,8 @@ export default function Room() {
                         </div>
                       )}
                     </div>
-                  )}
+                  </div>
+                )}
 
                   {activeTab === 'summary' && (
                     <div className="fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
