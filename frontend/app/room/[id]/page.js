@@ -541,10 +541,17 @@ export default function Room() {
     })
     .filter(item => item.stream);
     
-  const activeScreenStream = isScreenSharing ? screenStreamRef.current : remoteScreenStreams[0]?.stream;
-  const screenSharerName = isScreenSharing ? "You" : remoteScreenStreams[0]?.data.userName;
+  const allActiveScreenStreams = [];
+  if (isScreenSharing && screenStreamRef.current) {
+    allActiveScreenStreams.push({ id: 'local-screen', userName: 'You', stream: screenStreamRef.current });
+  }
+  remoteScreenStreams.forEach(item => {
+    allActiveScreenStreams.push({ id: item.id, userName: item.data.userName, stream: item.stream });
+  });
 
-  const MAX_VISIBLE_TILES = activeScreenStream 
+  const hasScreenShare = allActiveScreenStreams.length > 0;
+
+  const MAX_VISIBLE_TILES = hasScreenShare 
     ? (isAiSidebarOpen ? 3 : 5) 
     : 6;
     
@@ -667,7 +674,7 @@ export default function Room() {
         <div className="grid-wrapper" style={{ flex: 1, minHeight: 0, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
           
           {/* Top Row for Cameras when Screen Sharing */}
-          {activeScreenStream && (
+          {hasScreenShare && (
             <div style={{ display: 'flex', gap: '16px', height: '160px', flexShrink: 0, overflowX: 'auto', paddingBottom: '8px' }}>
               <div className="meet-grid" style={{ display: 'flex', flexWrap: 'nowrap', gap: '16px' }}>
                 {/* Self Video */}
@@ -711,7 +718,7 @@ export default function Room() {
           )}
 
           {/* Main Area */}
-          {!activeScreenStream ? (
+          {!hasScreenShare ? (
             <div className="meet-grid" data-count={renderedTilesCount} style={{ flex: 1 }}>
               {/* Remote Peers */}
               {visibleRemoteEntries.map(([peerId, peerData]) => (
@@ -747,16 +754,20 @@ export default function Room() {
               </div>
             </div>
           ) : (
-            <div className="video-wrapper" style={{ flex: 1, backgroundColor: 'var(--bg-color)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
-              <div className="video-container" style={{ position: 'relative', height: '100%', width: '100%' }}>
-                <video 
-                  autoPlay 
-                  playsInline 
-                  ref={el => { if(el && activeScreenStream && el.srcObject !== activeScreenStream) el.srcObject = activeScreenStream; }} 
-                  style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
-                />
-                <div className="video-overlay" style={{ zIndex: 20 }}>{screenSharerName}'s screen</div>
-              </div>
+            <div className="meet-grid" data-count={allActiveScreenStreams.length} style={{ flex: 1 }}>
+              {allActiveScreenStreams.map(share => (
+                <div key={share.id} className="video-wrapper" style={{ backgroundColor: 'transparent', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+                  <div className="video-container" style={{ position: 'relative', height: '100%', width: '100%', backgroundColor: 'transparent' }}>
+                    <video 
+                      autoPlay 
+                      playsInline 
+                      ref={el => { if(el && share.stream && el.srcObject !== share.stream) el.srcObject = share.stream; }} 
+                      style={{ width: '100%', height: '100%', objectFit: 'contain', backgroundColor: 'transparent' }} 
+                    />
+                    <div className="video-overlay" style={{ zIndex: 20 }}>{share.userName}'s screen</div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
