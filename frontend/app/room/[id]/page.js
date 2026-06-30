@@ -35,6 +35,7 @@ export default function Room() {
   
   const [isMicOn, setIsMicOn] = useState(true);
   const [isVideoOn, setIsVideoOn] = useState(true);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isParticipantsOpen, setIsParticipantsOpen] = useState(false);
   const [isAiSidebarOpen, setIsAiSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState('transcript');
@@ -63,6 +64,7 @@ export default function Room() {
   const isDeepgramReadyRef = useRef(false);
   const isMicOnRef = useRef(isMicOn);
   const localStreamRef = useRef(null);
+  const screenStreamRef = useRef(null);
   
   useEffect(() => { isMicOnRef.current = isMicOn; }, [isMicOn]);
   useEffect(() => { localStreamRef.current = localStream; }, [localStream]);
@@ -408,6 +410,56 @@ export default function Room() {
     router.push('/');
   };
 
+  const toggleScreenShare = async () => {
+    if (isScreenSharing) {
+      // Stop screen sharing -> switch back to camera
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach(track => track.stop());
+        screenStreamRef.current = null;
+      }
+      const cameraTrack = localStreamRef.current?.getVideoTracks()[0];
+      if (cameraTrack) {
+        // Replace screen track with camera track in all peer connections
+        Object.values(peersRef.current).forEach(peer => {
+          const sender = peer.getSenders().find(s => s.track?.kind === 'video');
+          if (sender) sender.replaceTrack(cameraTrack);
+        });
+        // Show camera in local video
+        if (videoRef.current) {
+          videoRef.current.srcObject = localStreamRef.current;
+        }
+      }
+      setIsScreenSharing(false);
+    } else {
+      // Start screen sharing
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+        screenStreamRef.current = screenStream;
+        const screenTrack = screenStream.getVideoTracks()[0];
+        
+        // Replace camera track with screen track in all peer connections
+        Object.values(peersRef.current).forEach(peer => {
+          const sender = peer.getSenders().find(s => s.track?.kind === 'video');
+          if (sender) sender.replaceTrack(screenTrack);
+        });
+        
+        // Show screen share in local video
+        if (videoRef.current) {
+          videoRef.current.srcObject = screenStream;
+        }
+        
+        // Handle user clicking browser's "Stop sharing" button
+        screenTrack.onended = () => {
+          toggleScreenShare();
+        };
+        
+        setIsScreenSharing(true);
+      } catch (err) {
+        console.log('Screen share cancelled or failed:', err);
+      }
+    }
+  };
+
   const remoteEntries = Object.entries(remotePeers);
   const totalParticipants = remoteEntries.length + 1; // +1 for self
 
@@ -723,7 +775,7 @@ export default function Room() {
           <button className={`btn-icon ${!isVideoOn ? 'danger' : ''}`} onClick={() => setIsVideoOn(!isVideoOn)}>
             {isVideoOn ? <Video size={20} /> : <VideoOff size={20} />}
           </button>
-          <button className="btn-icon">
+          <button className={`btn-icon ${isScreenSharing ? 'active' : ''}`} onClick={toggleScreenShare} style={{ backgroundColor: isScreenSharing ? 'var(--accent-color)' : undefined }}>
             <MonitorUp size={20} />
           </button>
           <button className="btn-icon danger" onClick={handleEndCall} style={{ width: '72px', borderRadius: '36px' }}>
