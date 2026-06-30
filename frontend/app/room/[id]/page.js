@@ -293,16 +293,28 @@ export default function Room() {
     });
 
     socketRef.current.on('track-metadata', (payload) => {
-      const { caller, streamId, type } = payload;
+      const { caller, streamId, type, action } = payload;
       setRemotePeers(prev => {
         const peer = prev[caller];
         if (!peer) return prev;
         
+        if (action === 'stop' && type === 'screen') {
+           return {
+             ...prev,
+             [caller]: {
+               ...peer,
+               screenStreamId: null,
+               isScreenSharing: false
+             }
+           };
+        }
+
         return {
           ...prev,
           [caller]: {
             ...peer,
-            [`${type}StreamId`]: streamId
+            [`${type}StreamId`]: streamId,
+            isScreenSharing: type === 'screen' ? true : peer.isScreenSharing
           }
         };
       });
@@ -483,7 +495,14 @@ export default function Room() {
           const peer = peersRef.current[peerId];
           const sender = peer.getSenders().find(s => s.track === screenTrack);
           if (sender) peer.removeTrack(sender);
-          // Metadata cleanup not strictly necessary, receivers will handle it when track is removed
+          if (socketRef.current) {
+            socketRef.current.emit('track-metadata', { 
+              target: peerId, 
+              caller: socketRef.current.id, 
+              action: 'stop',
+              type: 'screen' 
+            });
+          }
         });
         screenStreamRef.current.getTracks().forEach(track => track.stop());
         screenStreamRef.current = null;
@@ -529,7 +548,7 @@ export default function Room() {
     .map(([id, data]) => {
       let stream = data.streams?.[data.screenStreamId];
       // Fallback if ID doesn't match (WebRTC sometimes regenerates stream IDs)
-      if (!stream && data.streams) {
+      if (!stream && data.streams && data.isScreenSharing) {
         const streamIds = Object.keys(data.streams);
         if (streamIds.length > 1) {
           const camId = data.cameraStreamId || streamIds[0];
