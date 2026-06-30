@@ -188,7 +188,7 @@ export default function Room() {
       stream.getTracks().forEach(track => {
         peer.addTrack(track, stream);
         if (socketRef.current) {
-          socketRef.current.emit('track-metadata', { target: targetSocketId, caller: socketRef.current.id, trackId: track.id, type: 'camera' });
+          socketRef.current.emit('track-metadata', { target: targetSocketId, caller: socketRef.current.id, streamId: stream.id, type: 'camera' });
         }
       });
     }
@@ -294,12 +294,10 @@ export default function Room() {
     });
 
     socketRef.current.on('track-metadata', (payload) => {
-      const { caller, trackId, type } = payload;
+      const { caller, streamId, type } = payload;
       setRemotePeers(prev => {
         const peer = prev[caller];
         if (!peer) return prev;
-        
-        const streamId = peer[`track_${trackId}_streamId`];
         
         return {
           ...prev,
@@ -507,7 +505,7 @@ export default function Room() {
             socketRef.current.emit('track-metadata', { 
               target: peerId, 
               caller: socketRef.current.id, 
-              trackId: screenTrack.id, 
+              streamId: screenStream.id, 
               type: 'screen' 
             });
           }
@@ -664,7 +662,14 @@ export default function Room() {
                 {/* Self Video */}
                 <div className="video-wrapper" style={{ minWidth: '240px', width: '240px' }}>
                   <div className="video-container" style={{ position: 'relative' }}>
-                    <video ref={videoRef} autoPlay playsInline muted style={{ display: isVideoOn ? 'block' : 'none' }} />
+                    <video 
+                      ref={el => {
+                        videoRef.current = el;
+                        if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
+                          el.srcObject = localStreamRef.current;
+                        }
+                      }}
+                      autoPlay playsInline muted style={{ transform: 'scaleX(-1)', display: isVideoOn ? 'block' : 'none' }} />
                   {!isVideoOn && (
                     <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--surface-color)' }}>
                       <div style={{ width: '48px', height: '48px', borderRadius: '50%', backgroundColor: 'var(--surface-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -709,7 +714,14 @@ export default function Room() {
               {/* Self Video */}
               <div className="video-wrapper">
                 <div className="video-container" style={{ position: 'relative' }}>
-                  <video ref={videoRef} autoPlay playsInline muted style={{ transform: 'scaleX(-1)', display: isVideoOn ? 'block' : 'none' }} />
+                  <video 
+                      ref={el => {
+                        videoRef.current = el;
+                        if (el && localStreamRef.current && el.srcObject !== localStreamRef.current) {
+                          el.srcObject = localStreamRef.current;
+                        }
+                      }}
+                      autoPlay playsInline muted style={{ transform: 'scaleX(-1)', display: isVideoOn ? 'block' : 'none' }} />
                 {!isVideoOn && (
                   <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--surface-color)' }}>
                     <div style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: 'var(--surface-hover)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -722,12 +734,12 @@ export default function Room() {
               </div>
             </div>
           ) : (
-            <div className="video-wrapper" style={{ flex: 1, backgroundColor: '#000' }}>
-              <div className="video-container" style={{ position: 'relative' }}>
+            <div className="video-wrapper" style={{ flex: 1, backgroundColor: 'var(--bg-color)', borderRadius: 'var(--radius-lg)', overflow: 'hidden' }}>
+              <div className="video-container" style={{ position: 'relative', height: '100%', width: '100%' }}>
                 <video 
                   autoPlay 
                   playsInline 
-                  ref={el => { if(el) el.srcObject = activeScreenStream; }} 
+                  ref={el => { if(el && activeScreenStream && el.srcObject !== activeScreenStream) el.srcObject = activeScreenStream; }} 
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }} 
                 />
                 <div className="video-overlay" style={{ zIndex: 20 }}>{screenSharerName}'s screen</div>
