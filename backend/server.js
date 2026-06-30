@@ -3,7 +3,7 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const { Server } = require('socket.io');
-const OpenAI = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
@@ -20,9 +20,7 @@ const io = new Server(server, {
   }
 });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Store transcripts per room in memory
 const roomTranscripts = {};
@@ -108,13 +106,9 @@ Hãy viết bằng Tiếng Việt. Phân chia rõ ràng thành 2 phần:
 Đoạn hội thoại:
 ${conversation}`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 1500,
-    });
-
-    const aiText = response.choices[0].message.content;
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const aiText = result.response.text();
     
     if (meeting) {
       await prisma.summary.create({
@@ -127,7 +121,7 @@ ${conversation}`;
 
     res.json({ summary: aiText });
   } catch (error) {
-    console.error('OpenAI Error:', error);
+    console.error('Gemini Error:', error);
     res.status(500).json({ error: 'Failed to generate summary' });
   }
 });
@@ -181,13 +175,9 @@ Hãy viết bằng Tiếng Việt. Phân chia rõ ràng thành 2 phần:
 Đoạn hội thoại:
 ${conversation}`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 1500,
-    });
-
-    const aiText = response.choices[0].message.content;
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const result = await model.generateContent(prompt);
+    const aiText = result.response.text();
     
     await prisma.summary.create({
       data: {
